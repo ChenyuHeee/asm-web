@@ -87,8 +87,10 @@ def run():
         warnings.append("检测到视频内存写入 (B800/A000)，此类输出无法被捕获，结果可能为空")
     if re.search(r'int\s+10[hH]', code):
         warnings.append("检测到 INT 10h BIOS 调用，此类输出无法被重定向捕获")
-    if re.search(r'int\s+8[hH]\b|int\s+9[hH]\b', code):
-        warnings.append("检测到硬件中断处理 (INT 8h/9h)，程序可能需要硬件支持或更长的运行时间")
+    if re.search(r'int\s+9[hH]\b', code):
+        warnings.append("检测到键盘中断处理 (INT 9h)，无头模式下无法注入键盘扫描码，程序可能无法正常交互")
+    elif re.search(r'int\s+8[hH]\b', code):
+        warnings.append("检测到时钟中断处理 (INT 8h)，DOSBox 支持定时器模拟，但程序运行时间可能较长")
     if re.search(r'mov\s+ah,\s*31[hH]', code):
         warnings.append("检测到 TSR (终止并驻留) 调用，在隔离环境中无法观察效果")
 
