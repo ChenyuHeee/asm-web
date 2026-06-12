@@ -4,41 +4,75 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ASM 在线实验平台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=JetBrains+Mono:wght@400;500&family=Noto+Serif+SC:wght@600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material.min.css">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
+<div class="noise"></div>
+
 <header>
-    <h1>ASM 在线实验平台</h1>
-    <span class="subtitle">x86 汇编语言 (TASM 语法) · DOSBox 后端</span>
+    <div class="header-inner">
+        <div class="logo">
+            <span class="logo-icon">&Sigma;</span>
+            <div class="logo-text">
+                <h1>ASM<span class="logo-dot">.</span></h1>
+                <span class="subtitle">x86 汇编实验平台</span>
+            </div>
+        </div>
+        <div class="header-meta">
+            <span class="meta-badge">TASM</span>
+            <span class="meta-sep">·</span>
+            <span class="meta-badge">DOSBox</span>
+        </div>
+    </div>
 </header>
 
 <div class="main">
     <div class="editor-panel">
         <div class="toolbar">
-            <button id="btn-run" class="btn btn-run">&#9654; 运行</button>
-            <select id="select-example" class="select" aria-label="选择示例">
-                <option value="">-- 加载示例 --</option>
-            </select>
+            <div class="toolbar-left">
+                <button id="btn-run" class="btn-run">
+                    <span class="btn-icon">&#9654;</span>
+                    <span class="btn-label">运行</span>
+                    <span class="btn-hint">Ctrl+Enter</span>
+                </button>
+                <div class="select-wrap">
+                    <select id="select-example" class="select" aria-label="选择示例">
+                        <option value="">示例程序</option>
+                    </select>
+                    <span class="select-arrow">&#9662;</span>
+                </div>
+            </div>
             <span id="status" class="status" aria-live="polite"></span>
         </div>
 
         <div id="editor-container"></div>
 
         <div class="input-area" id="input-area">
-            <label>程序输入（stdin）：</label>
-            <textarea id="input-text" rows="2" placeholder="如果程序需要键盘输入，请在此填写..."></textarea>
+            <div class="input-header">
+                <label for="input-text">标准输入</label>
+                <span class="input-hint">程序需要键盘输入时在此填写</span>
+            </div>
+            <textarea id="input-text" rows="2" placeholder="例如: 输入字符或数字..."></textarea>
         </div>
     </div>
 
     <div class="output-panel">
         <div class="output-header">
-            <span>输出</span>
+            <div class="output-title">
+                <span class="output-dot"></span>
+                <span>输出</span>
+            </div>
             <button id="btn-clear" class="btn-clear">清空</button>
         </div>
-        <pre id="output" aria-live="polite"></pre>
+        <div class="output-body">
+            <pre id="output" aria-live="polite"></pre>
+        </div>
     </div>
 </div>
 

@@ -45,7 +45,7 @@ const editor = CodeMirror(document.getElementById("editor-container"), {
     autoCloseBrackets: true,
     extraKeys: {
         "Shift-Tab": "indentLess",
-        "Ctrl-]": "indentMore"
+        "Ctrl-]": "indentMore",
     },
 });
 
@@ -76,7 +76,6 @@ const btnClear = document.getElementById("btn-clear");
 const selectExample = document.getElementById("select-example");
 const statusEl = document.getElementById("status");
 const outputEl = document.getElementById("output");
-const inputArea = document.getElementById("input-area");
 const inputText = document.getElementById("input-text");
 
 // ---- state ----
@@ -96,7 +95,7 @@ async function loadExamples() {
             selectExample.appendChild(opt);
         });
     } catch (e) {
-        statusEl.textContent = "示例加载失败，请检查服务器连接";
+        statusEl.textContent = "示例加载失败";
         statusEl.className = "status error";
     }
 }
@@ -104,7 +103,7 @@ async function loadExamples() {
 selectExample.addEventListener("change", () => {
     const id = selectExample.value;
     if (!id) return;
-    const ex = examplesCache.find(e => e.id === id);
+    const ex = examplesCache.find((e) => e.id === id);
     if (ex) {
         editor.setValue(ex.code);
         statusEl.textContent = "已加载: " + ex.name;
@@ -122,8 +121,8 @@ btnRun.addEventListener("click", async () => {
 
     btnRun.disabled = true;
     btnClear.disabled = true;
-    btnRun.textContent = "编译运行中...";
-    statusEl.textContent = "正在执行...";
+    document.querySelector(".btn-run .btn-label").textContent = "执行中";
+    statusEl.textContent = "编译运行...";
     statusEl.className = "status running";
     outputEl.textContent = "";
     outputEl.className = "";
@@ -143,37 +142,40 @@ btnRun.addEventListener("click", async () => {
         if (data.success) {
             let outputText = data.output || "(无输出)";
             if (data.warnings && data.warnings.length > 0) {
-                const warnText = data.warnings.map(w => "⚠ " + w).join("\n");
-                outputText = warnText + "\n\n" + outputText;
+                outputText = "--- 警告 ---\n" + data.warnings.join("\n") + "\n\n" + outputText;
             }
             outputEl.textContent = outputText;
             outputEl.className = "";
             statusEl.textContent = "运行完成";
             statusEl.className = "status success";
 
-            // auto-show input area if output suggests program is waiting for input
-            if (data.output === "" || data.output === "(无输出)") {
-                inputArea.style.display = "block";
+            // flash the output dot
+            const dot = document.querySelector(".output-dot");
+            if (dot) {
+                dot.style.background = "var(--accent)";
+                dot.style.boxShadow = "0 0 8px rgba(212, 163, 76, 0.6)";
+                setTimeout(() => {
+                    dot.style.background = "";
+                    dot.style.boxShadow = "";
+                }, 600);
             }
         } else {
-            let errMsg = "";
-            if (data.stage === "compile") {
-                errMsg = "=== 编译错误 ===\n" + data.error;
-            } else if (data.stage === "runtime") {
-                errMsg = "=== 运行时错误 ===\n" + data.error;
-            } else {
-                errMsg = "=== 系统错误 ===\n" + data.error;
-            }
+            let errMsg = data.stage === "compile" ? "=== 编译错误 ===\n" + data.error
+                : data.stage === "runtime" ? "=== 运行时错误 ===\n" + data.error
+                : "=== 系统错误 ===\n" + data.error;
+
             if (data.warnings && data.warnings.length > 0) {
-                errMsg = data.warnings.map(w => "⚠ " + w).join("\n") + "\n\n" + errMsg;
+                errMsg = "--- 警告 ---\n" + data.warnings.join("\n") + "\n\n" + errMsg;
             }
             outputEl.textContent = errMsg;
             outputEl.className = "error-text";
-            statusEl.textContent = "失败 (" + (data.stage || "unknown") + ")";
+            statusEl.textContent = "失败";
             statusEl.className = "status error";
         }
     } catch (e) {
-        outputEl.textContent = "=== 请求失败 ===\n" + e.message + "\n\n请检查后端服务是否正常运行。";
+        outputEl.textContent = e.name === "AbortError"
+            ? "请求超时 (30s)，请检查服务器状态。"
+            : "请求失败: " + e.message + "\n\n请确认后端服务是否正常运行。";
         outputEl.className = "error-text";
         statusEl.textContent = "请求失败";
         statusEl.className = "status error";
@@ -181,7 +183,7 @@ btnRun.addEventListener("click", async () => {
         clearTimeout(timeoutId);
         btnRun.disabled = false;
         btnClear.disabled = false;
-        btnRun.textContent = "▶ 运行";
+        document.querySelector(".btn-run .btn-label").textContent = "运行";
         isRunning = false;
     }
 });
@@ -192,13 +194,6 @@ btnClear.addEventListener("click", () => {
     outputEl.className = "";
     statusEl.textContent = "";
     statusEl.className = "status";
-});
-
-// ---- toggle input area ----
-inputText.addEventListener("input", () => {
-    if (inputText.value.trim()) {
-        inputArea.style.display = "block";
-    }
 });
 
 // ---- keyboard shortcut ----
