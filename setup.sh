@@ -7,30 +7,30 @@ set -e
 
 echo "=== ASM Web 安装脚本 ==="
 
+# ---- 创建专用系统用户 ----
+if ! id -u asm-web &>/dev/null; then
+    sudo useradd --system --no-create-home --shell /usr/sbin/nologin asm-web
+fi
+
 # ---- 系统依赖 ----
 echo "[1/5] 安装系统依赖..."
 sudo apt update
-sudo apt install -y jwasm dosbox xvfb python3-pip python3-venv nginx
+sudo apt install -y dosbox xvfb python3-pip python3-venv nginx curl
 
-# JWasm 可能不在官方源，如果安装失败则从源码编译
+# JWasm 从源码编译（官方源中不包含 jwasm 包）
 if ! command -v jwasm &>/dev/null; then
     echo "JWasm 未找到，从源码编译..."
     sudo apt install -y gcc make git
     git clone --depth 1 https://github.com/Baron-von-Riedesel/JWasm.git /tmp/jwasm-build
     cd /tmp/jwasm-build
-    make -f Makefile.Linux -j$(nproc)
-    sudo cp jwasm /usr/local/bin/
+    make -f GccUnix.mak -j$(nproc)
+    sudo cp build/GccUnixR/jwasm /usr/local/bin/
     cd /tmp
     rm -rf /tmp/jwasm-build
 fi
 
 if ! command -v dosbox &>/dev/null; then
-    echo "dosbox 未找到，尝试安装 dosbox-staging..."
-    sudo apt install -y dosbox-staging
-    # 如果 dosbox-staging 的命令不同，创建软链接
-    if ! command -v dosbox &>/dev/null && command -v dosbox-staging &>/dev/null; then
-        sudo ln -sf "$(command -v dosbox-staging)" /usr/bin/dosbox
-    fi
+    echo "警告: dosbox 未安装。请手动安装: sudo apt install dosbox"
 fi
 
 echo "工具检查:"
@@ -38,21 +38,31 @@ echo "  jwasm:  $(command -v jwasm || echo '未找到!')"
 echo "  dosbox: $(command -v dosbox || echo '未找到!')"
 echo "  xvfb-run: $(command -v xvfb-run || echo '未找到!')"
 
-# ---- Python 环境 ----
-echo "[2/5] 配置 Python 虚拟环境..."
+# ---- 部署代码 ----
+echo "[2/5] 部署代码..."
 PROJECT_DIR="/opt/asm-web"
 sudo mkdir -p "$PROJECT_DIR"
-sudo chown "$USER:$USER" "$PROJECT_DIR"
-python3 -m venv "$PROJECT_DIR/venv"
-source "$PROJECT_DIR/venv/bin/activate"
-pip install flask gunicorn
-
-# ---- 部署代码 ----
-echo "[3/5] 部署代码..."
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cp -r "$SCRIPT_DIR/backend/"* "$PROJECT_DIR/"
-mkdir -p /tmp/asm-web
-chmod 755 /tmp/asm-web
+sudo cp -r "$SCRIPT_DIR/backend/"* "$PROJECT_DIR/"
+
+# ---- Python 环境 ----
+echo "[3/5] 配置 Python 虚拟环境..."
+sudo python3 -m venv "$PROJECT_DIR/venv"
+sudo "$PROJECT_DIR/venv/bin/pip" install -r "$PROJECT_DIR/requirements.txt"
+
+# 设置归属和权限
+sudo chown -R asm-web:asm-web "$PROJECT_DIR"
+sudo chmod 755 "$PROJECT_DIR"
+
+# 临时目录
+sudo mkdir -p /tmp/asm-web
+sudo chown asm-web:asm-web /tmp/asm-web
+sudo chmod 755 /tmp/asm-web
+
+# tmpfiles.d 自动清理（超过 1 小时的临时文件）
+sudo tee /etc/tmpfiles.d/asm-web.conf > /dev/null <<'EOF'
+d /tmp/asm-web 0755 asm-web asm-web 1h
+EOF
 
 # ---- systemd 服务 ----
 echo "[4/5] 配置 systemd 服务..."
@@ -63,11 +73,17 @@ After=network.target
 
 [Service]
 Type=simple
-User=$USER
+User=asm-web
+Group=asm-web
 WorkingDirectory=$PROJECT_DIR
 ExecStart=$PROJECT_DIR/venv/bin/gunicorn -w 2 -b 127.0.0.1:5000 app:app
 Restart=on-failure
 RestartSec=3
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectHome=true
+ReadWritePaths=/tmp/asm-web
+ReadOnlyPaths=$PROJECT_DIR
 
 [Install]
 WantedBy=multi-user.target
@@ -79,7 +95,7 @@ sudo systemctl restart asm-web
 
 # ---- Nginx ----
 echo "[5/5] 配置 Nginx..."
-PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || echo "YOUR_IP")
+PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || wget -qO- ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
 sudo tee /etc/nginx/sites-available/asm-web > /dev/null <<EOF
 server {
     listen 80;
@@ -101,16 +117,12 @@ sudo ln -sf /etc/nginx/sites-available/asm-web /etc/nginx/sites-enabled/
 sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t && sudo systemctl restart nginx
 
+# ---- 防火墙 ----
+sudo ufw allow 80/tcp
+sudo ufw --force enable
+
 echo ""
 echo "=== 安装完成! ==="
 echo "访问地址: http://$PUBLIC_IP"
 echo ""
-echo "测试编译:"
-echo "  echo 'code segment' > /tmp/test.asm"
-echo "  echo 'assume cs:code' >> /tmp/test.asm"
-echo "  echo 'main: mov ah,4ch; int 21h' >> /tmp/test.asm"
-echo "  echo 'code ends' >> /tmp/test.asm"
-echo "  echo 'end main' >> /tmp/test.asm"
-echo "  jwasm -mz -nologo /tmp/test.asm"
-echo ""
-echo "日志: sudo journalctl -u asm-web -f"
+echo "验证安装成功。日志: sudo journalctl -u asm-web -f"

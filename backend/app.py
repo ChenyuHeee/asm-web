@@ -2,6 +2,9 @@ import subprocess
 import uuid
 import os
 import shutil
+import signal
+import threading
+import re
 from flask import Flask, request, jsonify, send_from_directory
 
 app = Flask(__name__, static_folder="static", static_url_path="")
@@ -12,8 +15,11 @@ XVFB = "/usr/bin/xvfb-run"
 DOSBOX = "/usr/bin/dosbox"
 
 TIMEOUT_COMPILE = 10
-TIMEOUT_RUN = 5
+TIMEOUT_RUN = 15
 MAX_OUTPUT = 64 * 1024
+
+MAX_CONCURRENT = 4
+semaphore = threading.Semaphore(MAX_CONCURRENT)
 
 os.makedirs(WORK_DIR, exist_ok=True)
 
@@ -57,12 +63,37 @@ def examples():
 
 @app.route("/api/run", methods=["POST"])
 def run():
+    if not request.is_json:
+        return jsonify({"success": False, "error": "Content-Type 必须为 application/json"}), 415
+
     data = request.get_json()
     if not data or "code" not in data:
         return jsonify({"success": False, "error": "请提供代码"}), 400
 
     code = data["code"]
     stdin = data.get("stdin", "")
+
+    MAX_CODE_SIZE = 100 * 1024  # 100KB
+    MAX_STDIN_SIZE = 4 * 1024   # 4KB
+
+    if len(code) > MAX_CODE_SIZE:
+        return jsonify({"success": False, "error": f"代码超过大小限制 ({MAX_CODE_SIZE // 1024}KB)"}), 400
+    if len(stdin) > MAX_STDIN_SIZE:
+        return jsonify({"success": False, "error": f"输入超过大小限制 ({MAX_STDIN_SIZE // 1024}KB)"}), 400
+
+    # Check for unsupported output methods
+    warnings = []
+    if re.search(r'0[bB]800[hH]', code) or re.search(r'0[aA]000[hH]', code):
+        warnings.append("检测到视频内存写入 (B800/A000)，此类输出无法被捕获，结果可能为空")
+    if re.search(r'int\s+10[hH]', code):
+        warnings.append("检测到 INT 10h BIOS 调用，此类输出无法被重定向捕获")
+    if re.search(r'int\s+8[hH]\b|int\s+9[hH]\b', code):
+        warnings.append("检测到硬件中断处理 (INT 8h/9h)，程序可能需要硬件支持或更长的运行时间")
+    if re.search(r'mov\s+ah,\s*31[hH]', code):
+        warnings.append("检测到 TSR (终止并驻留) 调用，在隔离环境中无法观察效果")
+
+    if not semaphore.acquire(blocking=False):
+        return jsonify({"success": False, "error": "服务器繁忙，请稍后重试（最多同时运行 4 个程序）"}), 429
 
     session_id = str(uuid.uuid4())[:8]
     session_dir = os.path.join(WORK_DIR, session_id)
@@ -75,16 +106,27 @@ def run():
             f.write(code)
 
         # ---- compile ----
-        compile_result = subprocess.run(
-            [JWASM, "-mz", "-nologo", "source.asm"],
+        proc = subprocess.Popen(
+            [JWASM, "-mz", "-zt0", "-nologo", "source.asm"],
             cwd=session_dir,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=TIMEOUT_COMPILE,
+            start_new_session=True,
         )
+        try:
+            compile_stdout, compile_stderr = proc.communicate(timeout=TIMEOUT_COMPILE)
+        except subprocess.TimeoutExpired:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            proc.wait()
+            return jsonify({
+                "success": False,
+                "stage": "compile",
+                "error": f"编译超时（{TIMEOUT_COMPILE} 秒限制）",
+            })
 
-        if compile_result.returncode != 0:
-            err = compile_result.stderr or compile_result.stdout or "未知编译错误"
+        if proc.returncode != 0:
+            err = compile_stderr or compile_stdout or "未知编译错误"
             return jsonify({"success": False, "stage": "compile", "error": err})
 
         # ---- locate executable ----
@@ -105,11 +147,11 @@ def run():
         stdin_path = None
         if stdin:
             stdin_path = os.path.join(session_dir, "input.txt")
+            content = stdin.replace("\r\n", "\n").replace("\n", "\r\n")
+            if not content.endswith("\r\n"):
+                content += "\r\n"
             with open(stdin_path, "w", encoding="utf-8") as f:
-                f.write(stdin)
-            # ensure DOS line ending for proper int 21h buffered input
-            if not stdin.endswith("\r\n") and not stdin.endswith("\n"):
-                f.write("\r\n")
+                f.write(content)
 
         # ---- dosbox config ----
         conf_path = os.path.join(session_dir, "dosbox.conf")
@@ -126,15 +168,19 @@ def run():
             f.write("exit\n")
 
         # ---- execute ----
+        proc = subprocess.Popen(
+            [XVFB, "-a", DOSBOX, "-conf", "dosbox.conf"],
+            cwd=session_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
         try:
-            run_result = subprocess.run(
-                [XVFB, "-a", DOSBOX, "-conf", "dosbox.conf"],
-                cwd=session_dir,
-                capture_output=True,
-                text=True,
-                timeout=TIMEOUT_RUN,
-            )
+            run_stdout, run_stderr = proc.communicate(timeout=TIMEOUT_RUN)
         except subprocess.TimeoutExpired:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            proc.wait()
             return jsonify({
                 "success": False,
                 "stage": "runtime",
@@ -149,12 +195,15 @@ def run():
                 output = f.read()
 
         if not output:
-            output = run_result.stdout or ""
+            output = "(程序没有产生输出。如果使用了 INT 10h 或直接写入视频内存 (B800/A000)，这些输出无法被捕获。)"
 
         if len(output) > MAX_OUTPUT:
             output = output[:MAX_OUTPUT] + "\n\n--- 输出已截断 (64KB 限制) ---"
 
-        return jsonify({"success": True, "output": output})
+        result = {"success": True, "output": output}
+        if warnings:
+            result["warnings"] = warnings
+        return jsonify(result)
 
     except subprocess.TimeoutExpired:
         return jsonify({
@@ -165,11 +214,15 @@ def run():
     except Exception as e:
         return jsonify({"success": False, "stage": "system", "error": str(e)})
     finally:
-        shutil.rmtree(session_dir, ignore_errors=True)
+        try:
+            shutil.rmtree(session_dir)
+        except Exception:
+            pass  # best-effort cleanup; cron job handles leftovers
+        semaphore.release()
 
 
 if __name__ == "__main__":
     missing = check_tools()
     if missing:
         print(f"WARNING: 缺少工具: {', '.join(missing)}")
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=False)

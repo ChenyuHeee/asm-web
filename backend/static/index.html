@@ -19,15 +19,15 @@
     <div class="editor-panel">
         <div class="toolbar">
             <button id="btn-run" class="btn btn-run">&#9654; 运行</button>
-            <select id="select-example" class="select">
+            <select id="select-example" class="select" aria-label="选择示例">
                 <option value="">-- 加载示例 --</option>
             </select>
-            <span id="status" class="status"></span>
+            <span id="status" class="status" aria-live="polite"></span>
         </div>
 
         <div id="editor-container"></div>
 
-        <div class="input-area" id="input-area" style="display:none">
+        <div class="input-area" id="input-area">
             <label>程序输入（stdin）：</label>
             <textarea id="input-text" rows="2" placeholder="如果程序需要键盘输入，请在此填写..."></textarea>
         </div>
@@ -38,7 +38,7 @@
             <span>输出</span>
             <button id="btn-clear" class="btn-clear">清空</button>
         </div>
-        <pre id="output"></pre>
+        <pre id="output" aria-live="polite"></pre>
     </div>
 </div>
 
