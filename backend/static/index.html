@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ASM 在线实验平台</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+    <h1>ASM 在线实验平台</h1>
+    <span class="subtitle">x86 汇编语言 (TASM 语法) · DOSBox 后端</span>
+</header>
+
+<div class="main">
+    <div class="editor-panel">
+        <div class="toolbar">
+            <button id="btn-run" class="btn btn-run">&#9654; 运行</button>
+            <select id="select-example" class="select">
+                <option value="">-- 加载示例 --</option>
+            </select>
+            <span id="status" class="status"></span>
+        </div>
+
+        <div id="editor-container"></div>
+
+        <div class="input-area" id="input-area" style="display:none">
+            <label>程序输入（stdin）：</label>
+            <textarea id="input-text" rows="2" placeholder="如果程序需要键盘输入，请在此填写..."></textarea>
+        </div>
+    </div>
+
+    <div class="output-panel">
+        <div class="output-header">
+            <span>输出</span>
+            <button id="btn-clear" class="btn-clear">清空</button>
+        </div>
+        <pre id="output"></pre>
+    </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/mode/simple.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
