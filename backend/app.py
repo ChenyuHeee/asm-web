@@ -191,10 +191,12 @@ def run():
 
         # ---- collect output ----
         output = ""
-        output_txt = os.path.join(session_dir, "output.txt")
-        if os.path.exists(output_txt):
-            with open(output_txt, encoding="utf-8", errors="replace") as f:
-                output = f.read()
+        for fname in ("output.txt", "OUTPUT.TXT", "Output.txt"):
+            output_txt = os.path.join(session_dir, fname)
+            if os.path.exists(output_txt):
+                with open(output_txt, encoding="utf-8", errors="replace") as f:
+                    output = f.read()
+                break
 
         if not output:
             output = "(程序没有产生输出。如果使用了 INT 10h 或直接写入视频内存 (B800/A000)，这些输出无法被捕获。)"
