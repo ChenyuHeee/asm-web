@@ -13,6 +13,7 @@ WORK_DIR = "/tmp/asm-web"
 JWASM = "/usr/local/bin/jwasm"
 XVFB = "/usr/bin/xvfb-run"
 DOSBOX = "/usr/bin/dosbox"
+BWRAP = "/usr/bin/bwrap"
 
 TIMEOUT_COMPILE = 10
 TIMEOUT_RUN = 15
@@ -23,13 +24,55 @@ semaphore = threading.Semaphore(MAX_CONCURRENT)
 
 os.makedirs(WORK_DIR, exist_ok=True)
 
+# 危险代码模式：即使有 bwrap 沙箱也要警告用户
+DANGEROUS_PATTERNS = [
+    (r'\\\\\.\.\\\\|\\\\\.\.\\b|\\\.\.\\\\', "目录遍历 (..\\) — 尝试访问宿主机文件系统"),
+    (r'int\s+13[hH]', "INT 13h — BIOS 磁盘直接操作"),
+    (r'int\s+25[hH]', "INT 25h — 绝对磁盘扇区读取"),
+    (r'int\s+26[hH]', "INT 26h — 绝对磁盘扇区写入"),
+    (r'(?i)format\s+[cCdD]', "FORMAT 命令 — 格式化磁盘"),
+    (r'in\s+al,\s*70[hH]', "CMOS 端口读取 (in al, 70h)"),
+    (r'out\s+70[hH],\s*al', "CMOS 端口写入 (out 70h, al)"),
+]
+
 
 def check_tools():
     missing = []
-    for name, path in [("jwasm", JWASM), ("xvfb-run", XVFB), ("dosbox", DOSBOX)]:
+    for name, path in [("jwasm", JWASM), ("xvfb-run", XVFB), ("dosbox", DOSBOX), ("bwrap", BWRAP)]:
         if not os.path.exists(path):
             missing.append(name)
     return missing
+
+
+def has_bwrap():
+    return os.path.exists(BWRAP)
+
+
+def build_sandbox_cmd(session_dir):
+    """构建 bwrap 沙箱命令，隔离 DOSBox 的文件系统访问。
+
+    原理：
+    - / 整个宿主文件系统以只读方式挂载
+    - /tmp 使用独立 tmpfs（程序即使写 /tmp 也无法影响宿主机）
+    - 仅 session_dir 可读写
+    - 即使 DOS 程序做 ..\\..\\..\\tmp\\poc.txt 也无法穿透
+
+    回退：如果 bwrap 不可用，直接返回无沙箱命令（仅依赖超时+进程组隔离）
+    """
+    if not has_bwrap():
+        return [XVFB, "-a", DOSBOX, "-conf", "dosbox.conf"]
+
+    return [
+        BWRAP,
+        "--ro-bind", "/", "/",
+        "--dev", "/dev",
+        "--proc", "/proc",
+        "--tmpfs", "/tmp",
+        "--bind", session_dir, session_dir,
+        "--unshare-all",
+        "--die-with-parent",
+        XVFB, "-a", DOSBOX, "-conf", "dosbox.conf",
+    ]
 
 
 @app.route("/")
@@ -81,8 +124,15 @@ def run():
     if len(stdin) > MAX_STDIN_SIZE:
         return jsonify({"success": False, "error": f"输入超过大小限制 ({MAX_STDIN_SIZE // 1024}KB)"}), 400
 
-    # Check for unsupported output methods
+    # ---- 安全扫描 ----
     warnings = []
+    security_warnings = []
+
+    for pattern, desc in DANGEROUS_PATTERNS:
+        if re.search(pattern, code):
+            security_warnings.append(f"[安全警告] {desc}")
+
+    # 视频/中断输出方式检测
     if re.search(r'0[bB]800[hH]', code) or re.search(r'0[aA]000[hH]', code):
         warnings.append("检测到视频内存写入 (B800/A000)，此类输出无法被捕获，结果可能为空")
     if re.search(r'int\s+10[hH]', code):
@@ -94,12 +144,26 @@ def run():
     if re.search(r'mov\s+ah,\s*31[hH]', code):
         warnings.append("检测到 TSR (终止并驻留) 调用，在隔离环境中无法观察效果")
 
+    # 如果 bwrap 不可用且代码有危险模式，拒绝执行
+    if not has_bwrap() and security_warnings:
+        return jsonify({
+            "success": False,
+            "stage": "security",
+            "error": "代码包含潜在危险操作，且服务器缺少 bwrap 沙箱保护，已拒绝执行：\n"
+                     + "\n".join(security_warnings),
+        }), 403
+
+    all_warnings = security_warnings + warnings
+
     if not semaphore.acquire(blocking=False):
         return jsonify({"success": False, "error": "服务器繁忙，请稍后重试（最多同时运行 4 个程序）"}), 429
 
     session_id = str(uuid.uuid4())[:8]
     session_dir = os.path.join(WORK_DIR, session_id)
     os.makedirs(session_dir, exist_ok=True)
+
+    # 记录运行前 session 目录外的文件状态（用于事后审计）
+    files_before = set(os.listdir(WORK_DIR))
 
     try:
         # ---- write source ----
@@ -169,9 +233,11 @@ def run():
                 f.write("source.exe > output.txt\n")
             f.write("exit\n")
 
-        # ---- execute ----
+        # ---- execute (with bwrap sandbox) ----
+        sandbox_cmd = build_sandbox_cmd(session_dir)
+
         proc = subprocess.Popen(
-            [XVFB, "-a", DOSBOX, "-conf", "dosbox.conf"],
+            sandbox_cmd,
             cwd=session_dir,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -189,6 +255,24 @@ def run():
                 "error": f"程序运行超时（{TIMEOUT_RUN} 秒限制），可能存在死循环",
             })
 
+        # ---- 事后审计：检查是否有文件泄露到 session 目录外 ----
+        files_after = set(os.listdir(WORK_DIR))
+        leaked = files_after - files_before - {session_id}
+        if leaked:
+            # 清理泄露的文件
+            for leaked_name in leaked:
+                leaked_path = os.path.join(WORK_DIR, leaked_name)
+                try:
+                    if os.path.isfile(leaked_path):
+                        os.remove(leaked_path)
+                    elif os.path.isdir(leaked_path):
+                        shutil.rmtree(leaked_path)
+                except Exception:
+                    pass
+            security_warnings.append(
+                f"[已拦截] 程序尝试在沙箱外创建文件: {', '.join(leaked)}"
+            )
+
         # ---- collect output ----
         output = ""
         for fname in ("output.txt", "OUTPUT.TXT", "Output.txt"):
@@ -205,8 +289,8 @@ def run():
             output = output[:MAX_OUTPUT] + "\n\n--- 输出已截断 (64KB 限制) ---"
 
         result = {"success": True, "output": output}
-        if warnings:
-            result["warnings"] = warnings
+        if all_warnings:
+            result["warnings"] = all_warnings
         return jsonify(result)
 
     except subprocess.TimeoutExpired:
@@ -221,7 +305,7 @@ def run():
         try:
             shutil.rmtree(session_dir)
         except Exception:
-            pass  # best-effort cleanup; cron job handles leftovers
+            pass
         semaphore.release()
 
 
@@ -229,4 +313,7 @@ if __name__ == "__main__":
     missing = check_tools()
     if missing:
         print(f"WARNING: 缺少工具: {', '.join(missing)}")
+    if not has_bwrap():
+        print("WARNING: bwrap 未安装，DOSBox 将无文件系统沙箱运行！")
+        print("  安装: sudo apt install bubblewrap")
     app.run(host="0.0.0.0", port=5000, debug=False)
