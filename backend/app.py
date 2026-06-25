@@ -239,6 +239,7 @@ def run():
             f.write("[autoexec]\n")
             f.write(f"mount c {session_dir}\n")
             f.write("c:\n")
+            f.write("cls\n")
             if stdin_path:
                 f.write("source.exe < input.txt > output.txt\n")
             else:
