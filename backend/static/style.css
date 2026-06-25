@@ -521,6 +521,41 @@ header {
     color: var(--accent);
 }
 
+/* ---- video screen ---- */
+.video-wrap {
+    margin-bottom: 16px;
+    border: 1px solid var(--border-active);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+
+.video-header {
+    padding: 6px 12px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+    background: var(--bg-elevated);
+    border-bottom: 1px solid var(--border);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.video-screen {
+    margin: 0;
+    padding: 8px 10px;
+    font-family: var(--font-code);
+    font-size: 11px;
+    line-height: 1.15;
+    color: #b0b0b0;
+    background: #000;
+    white-space: pre;
+    overflow-x: auto;
+    overflow-wrap: normal;
+    word-break: normal;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
 /* ---- clear button ---- */
 .btn-clear {
     background: none;

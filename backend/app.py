@@ -133,10 +133,14 @@ def run():
             security_warnings.append(f"[安全警告] {desc}")
 
     # 视频/中断输出方式检测
-    if re.search(r'0[bB]800[hH]', code) or re.search(r'0[aA]000[hH]', code):
-        warnings.append("检测到视频内存写入 (B800/A000)，此类输出无法被捕获，结果可能为空")
+    uses_video = bool(re.search(r'0[bB]800[hH]', code) or re.search(r'0[aA]000[hH]', code)
+                      or re.search(r'int\s+10[hH]', code))
+    if re.search(r'0[bB]800[hH]', code):
+        warnings.append("检测到 B800 文本显存写入 — 将通过显存快照捕获输出")
+    if re.search(r'0[aA]000[hH]', code):
+        warnings.append("检测到 A000 图形显存，当前仅支持文本模式 B800 快照")
     if re.search(r'int\s+10[hH]', code):
-        warnings.append("检测到 INT 10h BIOS 调用，此类输出无法被重定向捕获")
+        warnings.append("检测到 INT 10h BIOS 调用，显存快照将捕获屏幕状态")
     if re.search(r'int\s+9[hH]\b', code):
         warnings.append("检测到键盘中断处理 (INT 9h)，无头模式下无法注入键盘扫描码，程序可能无法正常交互")
     elif re.search(r'int\s+8[hH]\b', code):
@@ -219,6 +223,14 @@ def run():
             with open(stdin_path, "w", encoding="utf-8") as f:
                 f.write(content)
 
+        # ---- copy video dumper if needed ----
+        dumpvideo_path = None
+        if uses_video:
+            dumpvideo_src = os.path.join(os.path.dirname(__file__), "dumpvideo.com")
+            if os.path.exists(dumpvideo_src):
+                dumpvideo_path = os.path.join(session_dir, "dumpvideo.com")
+                shutil.copy2(dumpvideo_src, dumpvideo_path)
+
         # ---- dosbox config ----
         conf_path = os.path.join(session_dir, "dosbox.conf")
         with open(conf_path, "w") as f:
@@ -231,6 +243,8 @@ def run():
                 f.write("source.exe < input.txt > output.txt\n")
             else:
                 f.write("source.exe > output.txt\n")
+            if dumpvideo_path:
+                f.write("dumpvi~1 > video.txt\n")
             f.write("exit\n")
 
         # ---- execute (with bwrap sandbox) ----
@@ -282,13 +296,24 @@ def run():
                     output = f.read()
                 break
 
-        if not output:
+        # ---- collect video snapshot ----
+        video_lines = []
+        for fname in ("video.txt", "VIDEO.TXT", "Video.txt"):
+            video_txt = os.path.join(session_dir, fname)
+            if os.path.exists(video_txt):
+                with open(video_txt, encoding="utf-8", errors="replace") as f:
+                    video_lines = [line.rstrip("\n\r") for line in f.readlines()]
+                break
+
+        if not output and not video_lines:
             output = "(程序没有产生输出。如果使用了 INT 10h 或直接写入视频内存 (B800/A000)，这些输出无法被捕获。)"
 
         if len(output) > MAX_OUTPUT:
             output = output[:MAX_OUTPUT] + "\n\n--- 输出已截断 (64KB 限制) ---"
 
         result = {"success": True, "output": output}
+        if video_lines:
+            result["video"] = video_lines
         if all_warnings:
             result["warnings"] = all_warnings
         return jsonify(result)

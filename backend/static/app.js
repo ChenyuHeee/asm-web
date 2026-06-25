@@ -140,12 +140,23 @@ btnRun.addEventListener("click", async () => {
         const data = await res.json();
 
         if (data.success) {
-            let outputText = data.output || "(无输出)";
+            let outputText = data.output || "";
             if (data.warnings && data.warnings.length > 0) {
                 outputText = "--- 警告 ---\n" + data.warnings.join("\n") + "\n\n" + outputText;
             }
-            outputEl.textContent = outputText;
+            outputEl.textContent = outputText || null;
             outputEl.className = "";
+
+            // ---- render video snapshot ----
+            const videoEl = document.getElementById("video-output");
+            const videoWrap = document.getElementById("video-wrap");
+            if (data.video && data.video.length > 0) {
+                videoEl.textContent = data.video.join("\n");
+                videoWrap.style.display = "block";
+            } else {
+                videoWrap.style.display = "none";
+            }
+
             statusEl.textContent = "运行完成";
             statusEl.className = "status success";
 
